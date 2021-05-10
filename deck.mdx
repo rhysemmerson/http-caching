@@ -1,0 +1,181 @@
+import { future, highlight, prism } from '@mdx-deck/themes'
+
+export const theme = {
+    ...prism
+}
+
+# Modern Http Caching
+
+---
+
+## Caching introduction
+
+- public / private cache
+- cache proxies
+- max age
+
+- Goals: Cost, Freshness, Percieved Performance
+
+-- 
+
+## Response Caching
+
+- put app behind a cdn 
+
+---
+
+## Response Caching - Laravel
+
+```php
+Route::middleware('cache.headers:public;max_age=3600')->group(function () {
+    Route::get('terms-and-conditions');
+    Route::get('about-us');
+});
+```
+--- 
+
+## Response Caching - benefits
+
+- low effort solution for decreased avg response time
+- works well if ratio of traffic to number of urls is high
+- when content changes infrequently, or freshness is less important a high max age can be set
+
+---
+
+## Response Caching - Limitations
+
+- high frequency urls have high utilisation 
+- less frequented urls have low cache utilisation (eg. /flip-flop-warmers?color=red&page=10)
+- if requests are distributed across many urls, avg response can be bad
+- 99th percentile response time is still really bad
+- not suitable when data needs to be fresh
+
+---
+
+## Response Caching - Stale while revalidate 
+
+```php
+Route::middleware('cache.headers:public;max_age=600;stale-while-revalidate=3600')->group(function () {
+    Route::get('new-products');
+});
+```
+
+- lower max age
+- high cache utilisation
+- fresh data
+
+---
+
+## Response Caching - more limitations
+
+- we still get many cache misses
+- this doesn't speed up our cold responses
+- if a user has to login we must use a private cache header
+
+--- 
+
+## Micro services
+
+- we've been breaking our domain over the last year and a half
+- a pattern natually emerged where services sorted themselves into core and edge services
+- edge services are user facing 
+- aggregate data from multiple core apis and have no database of their own
+
+--- 
+
+## Micro services - store example
+
+#### Core apis
+inventory
+recommendations
+orders
+
+#### Edge services
+storefront
+landing pages
+marketing services
+
+---
+
+## Micro services - Core api
+
+```php
+class RecommendationsController
+{
+    public function __invoke($productId)
+    {
+        $this->middleware('cache.headers:public;max-age=600;stale-while-revalidate=86400');
+        return RecommendedProduct::collection(
+            Recommendation::forProduct(productId)
+        );
+    }
+}
+
+```
+
+## Micro services - cache middleware
+
+https://github.com/Kevinrob/guzzle-cache-middleware
+
+---
+
+## Micro services - using cache middleware with http facade
+
+```php
+
+public function register()
+{
+    $this
+        ->app
+        ->bind('mystoreClient', function () {
+            return Http::withToken()
+                ->withMiddleware(new CacheMiddleware(
+                    new PublicCacheStrategy(
+                        new LaravelCacheStorage(Cache::store('redis'))
+                    )
+                ));
+        });
+
+    $this->app->when(ProductController::class)
+        ->needs(PendingRequest::class)
+        ->give('mystoreClient');
+}
+
+```
+
+
+```php
+
+class ProductController
+{
+
+    private PendingRequest $client;
+
+    public function __construct(PendingRequest $client)
+    {
+        $this->client = $client;
+    }
+
+    public function index($productId)
+    {
+        [$product, $recommendations, $cart] = $this->client->pool(fn (Pool $pool) => [
+            $pool->get("https://products.mystore.com/$productId"),
+            $pool->get("https://recommendations.mystore.com/$productId"),
+            $pool->get("https://orders.mystore.com/carts/".session('cart-id')),
+        ]);
+
+        return Inertia::render('Products/Show', [
+            'products' => $products->json(),
+            'recommendations' => $recommendations->json(),
+            'cart' => $cart->json(),
+        ]);
+    }
+}
+
+```
+
+---
+
+## Fin
+
+
